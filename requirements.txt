@@ -1,0 +1,4 @@
+flask
+youtube_transcript_api
+google-generativeai
+python-dotenv
