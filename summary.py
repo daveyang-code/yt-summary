@@ -2,13 +2,16 @@ import os
 from flask import Flask, render_template_string, request, jsonify
 import re
 import google.generativeai as genai
-from youtube_transcript_api import YouTubeTranscriptApi
+from innertube import InnerTube
 
 app = Flask(__name__)
 
 # Configure Gemini API
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
+
+# Transcript panel identifier constant
+PANEL_IDENTIFIER_TRANSCRIPT = "engagement-panel-searchable-transcript"
 
 
 def extract_video_id(url):
@@ -20,11 +23,62 @@ def extract_video_id(url):
     return video_id_match.group(1) if video_id_match else None
 
 
+def extract_transcript_params(next_data):
+    """Extract transcript parameters from next_data"""
+    engagement_panels = next_data.get("engagementPanels", [])
+    for engagement_panel in engagement_panels:
+        engagement_panel_section = engagement_panel.get(
+            "engagementPanelSectionListRenderer", {}
+        )
+        if (
+            engagement_panel_section.get("panelIdentifier")
+            != PANEL_IDENTIFIER_TRANSCRIPT
+        ):
+            continue
+
+        content = engagement_panel_section.get("content", {})
+        if "continuationItemRenderer" in content:
+            return content["continuationItemRenderer"]["continuationEndpoint"][
+                "getTranscriptEndpoint"
+            ]["params"]
+
+    return None
+
+
 def get_transcript(video_id):
-    """Retrieve transcript for a given YouTube video ID"""
+    """Retrieve transcript for a given YouTube video ID using innertube"""
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        return " ".join([entry["text"] for entry in transcript]), None
+        client = InnerTube("WEB")
+        data = client.next(video_id)
+
+        # Extract transcript parameters
+        transcript_params = extract_transcript_params(data)
+        if not transcript_params:
+            return None, "No transcript available for this video"
+
+        # Get transcript data
+        transcript_data = client.get_transcript(transcript_params)
+
+        # Extract transcript segments
+        transcript_segments = transcript_data["actions"][0][
+            "updateEngagementPanelAction"
+        ]["content"]["transcriptRenderer"]["content"]["transcriptSearchPanelRenderer"][
+            "body"
+        ][
+            "transcriptSegmentListRenderer"
+        ][
+            "initialSegments"
+        ]
+
+        # Combine all transcript segments into one text
+        full_transcript = ""
+        for segment in transcript_segments:
+            segment_renderer = segment["transcriptSegmentRenderer"]
+            snippet = segment_renderer["snippet"]["runs"][0]["text"]
+            full_transcript += snippet + " "
+
+        return full_transcript.strip(), None
+
     except Exception as e:
         return None, str(e)
 
